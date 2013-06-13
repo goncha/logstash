@@ -2,8 +2,8 @@
 #   rsync
 #   wget or curl
 #
-JRUBY_VERSION=1.7.3
-ELASTICSEARCH_VERSION=0.20.6
+JRUBY_VERSION=1.7.4
+ELASTICSEARCH_VERSION=0.90.0
 #VERSION=$(shell ruby -r./lib/logstash/version -e 'puts LOGSTASH_VERSION')
 VERSION=$(shell awk -F\" '/LOGSTASH_VERSION/ {print $$2}' lib/logstash/version.rb)
 
@@ -16,6 +16,7 @@ ELASTICSEARCH_URL=http://download.elasticsearch.org/elasticsearch/elasticsearch
 ELASTICSEARCH=vendor/jar/elasticsearch-$(ELASTICSEARCH_VERSION)
 GEOIP=vendor/geoip/GeoLiteCity.dat
 GEOIP_URL=http://logstash.objects.dreamhost.com/maxmind/GeoLiteCity-2013-01-18.dat.gz
+KIBANA_URL=https://github.com/elasticsearch/kibana/archive/master.tar.gz
 PLUGIN_FILES=$(shell git ls-files | egrep '^lib/logstash/(inputs|outputs|filters)/[^/]+$$' | egrep -v '/(base|threadable).rb$$|/inputs/ganglia/')
 QUIET=@
 
@@ -31,7 +32,12 @@ TAR_OPTS=--wildcards
 endif
 
 TESTS=$(wildcard spec/support/*.rb spec/filters/*.rb spec/examples/*.rb spec/event.rb spec/outputs/graphite.rb spec/outputs/email.rb)
-default: jar
+default: 
+	@echo "Make targets you might be interested in:"
+	@echo "  flatjar -- builds the flatjar jar"
+	@echo "  flatjar-test -- runs the test suite against the flatjar"
+	@echo "  jar -- builds the monolithic jar"
+	@echo "  jar-test -- runs the test suite against the monolithic jar"
 
 # Figure out if we're using wget or curl
 .PHONY: wget-or-curl
@@ -153,12 +159,18 @@ build/ruby: | build
 .PHONY: build/monolith
 build/monolith: $(ELASTICSEARCH) $(JRUBY) $(GEOIP) vendor-gems | build
 build/monolith: vendor/ua-parser/regexes.yaml
+build/monolith: vendor/kibana
 build/monolith: compile copy-ruby-files vendor/jar/graphtastic-rmiclient.jar
 	-$(QUIET)mkdir -p $@
 	@# Unpack all the 3rdparty jars and any jars in gems
 	$(QUIET)find $$PWD/vendor/bundle $$PWD/vendor/jar -name '*.jar' \
 	| (cd $@; xargs -n1 jar xf)
-	@# copy openssl/lib/shared folders/files to root of jar - need this for openssl to work with JRuby
+	@# Merge all service file in all 3rdparty jars
+	$(QUIET)mkdir -p $@/META-INF/services/
+	$(QUIET)find $$PWD/vendor/bundle $$PWD/vendor/jar -name '*.jar' \
+	| xargs $(JRUBY_CMD) extract_services.rb -o $@/META-INF/services
+	@# copy openssl/lib/shared folders/files to root of jar 
+	@#- need this for openssl to work with JRuby
 	$(QUIET)mkdir -p $@/openssl
 	$(QUIET)mkdir -p $@/jopenssl
 	$(QUIET)cp -r $$PWD/vendor/bundle/jruby/1.9/gems/jruby-openss*/lib/shared/openssl/* $@/openssl
@@ -175,6 +187,7 @@ build/monolith: compile copy-ruby-files vendor/jar/graphtastic-rmiclient.jar
 	-$(QUIET)mkdir -p $@/vendor/ua-parser
 	-$(QUIET)cp vendor/ua-parser/regexes.yaml $@/vendor/ua-parser
 	$(QUIET)cp $(GEOIP) $@/
+	-$(QUIET)rsync -a vendor/kibana/ $@/vendor/kibana/
 
 vendor/ua-parser/: | build
 	$(QUIET)mkdir $@
@@ -233,8 +246,9 @@ flatjar: build/logstash-$(VERSION)-flatjar.jar
 build/jar: | build build/flatgems build/monolith
 	$(QUIET)mkdir build/jar
 	$(QUIET)rsync -va build/flatgems/root/ build/flatgems/lib/ build/monolith/ build/ruby/ patterns build/flatgems/data build/jar/
-	$(QUIET)(cd lib; rsync -a --delete logstash/web/public logstash/web/views ../build/jar/logstash/web)
-	$(QUIET)(cd lib; rsync -a --delete logstash/certs ../build/jar/logstash)
+	$(QUIET)(cd lib; rsync -a --delete logstash/web/public/ ../build/jar/logstash/web/public)
+	$(QUIET)(cd lib; rsync -a --delete logstash/web/views/ ../build/jar/logstash/web/views)
+	$(QUIET)(cd lib; rsync -a --delete logstash/certs/ ../build/jar/logstash/certs)
 
 build/logstash-$(VERSION)-flatjar.jar: | build/jar
 	$(QUIET)rm -f $@
@@ -349,11 +363,6 @@ package:
 		./build.sh debian 6; \
 	)
 
-kibana: | build
-	$(QUIET)mkdir build/kibana || true
-	$(QUIET)[ -f build/kibana/kibana.gemspec ] || $(QUIET)$(DOWNLOAD_COMMAND) - https://github.com/rashidkpc/Kibana/archive/v0.2.0.tar.gz | tar -C build/kibana --strip-components 1 -zx 
-	$(QUIET)grep -v thin build/kibana/kibana.gemspec > build/kibana/kibanablah.gemspec
-	$(QUIET)GEM_HOME=./vendor/bundle/jruby/1.9/ GEM_PATH= $(JRUBY_CMD) --1.9 ./gembag.rb build/kibana/kibanablah.gemspec
-
-kibana-flatjar: | kibana
-	$(QUIET)jar uf build/logstash-$(VERSION)-flatjar.jar -C build/kibana .
+vendor/kibana: | build
+	$(QUIET)mkdir vendor/kibana || true
+	$(DOWNLOAD_COMMAND) - $(KIBANA_URL) | tar -C $@ -zx --strip-components=1
