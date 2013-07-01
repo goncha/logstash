@@ -38,7 +38,7 @@ class LogStash::Inputs::Base < LogStash::Plugin
   # or in another character set other than UTF-8.
   #
   # This only affects "plain" format logs since json is UTF-8 already.
-  config :charset, :validate => ::Encoding.name_list, :default => "UTF-8"
+  config :charset, :validate => ::Encoding.name_list
 
   # If format is "json", an event sprintf string to build what
   # the display @message should be given (defaults to the raw JSON).
@@ -88,6 +88,9 @@ class LogStash::Inputs::Base < LogStash::Plugin
 
     case @format
     when "plain"
+      if @charset
+        raw.force_encoding(@charset)
+      end
       if raw.encoding.name != "UTF-8"
         # Convert to UTF-8 if not in that character set.
         raw = raw.encode("UTF-8", :invalid => :replace, :undef => :replace)
