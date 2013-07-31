@@ -83,6 +83,10 @@ class LogStash::Outputs::ElasticSearch < LogStash::Outputs::Base
   # By default, this is generated internally by the ES client.
   config :node_name, :validate => :string
 
+  # Throw events when number of inflight requests reaches
+  # 'max_inflight_requests'
+  config :throw_when_max_inflight, :validate => :boolean, :default => false
+
   public
   def register
     # TODO(sissel): find a better way of declaring where the elasticsearch
@@ -165,7 +169,11 @@ class LogStash::Outputs::ElasticSearch < LogStash::Outputs::Base
         @logger.info("Too many active ES requests, blocking now.", 
                      :inflight_requests => @inflight_requests,
                      :max_inflight_requests => @max_inflight_requests);
-        @inflight_cv.wait(@inflight_mutex)
+        if @throw_when_max_inflight
+          return
+        else
+          @inflight_cv.wait(@inflight_mutex)
+        end
       end
       # Increase the counter within @inflight_mutex 
       @inflight_requests += 1
